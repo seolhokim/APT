@@ -1,5 +1,7 @@
 # env
 env: walker_stand
+agent: ${apt} #or apt
+
 # IMPORTANT: if action_repeat is used the effective number of env steps needs to be
 # multiplied by action_repeat in the result graphs.
 # This is a common practice for a fair comparison.
@@ -31,7 +33,7 @@ lr: 1e-3
 batch_size: 256
 
 # agent configuration
-agent_nono:
+drq:
   name: drq
   class: drq.DRQAgent
   params:
@@ -52,7 +54,7 @@ agent_nono:
     critic_target_update_frequency: 2
     batch_size: ${batch_size}
 # agent configuration
-agent:
+apt:
   name: apt
   class: apt.APTAgent
   params:
