@@ -51,15 +51,15 @@ class APTAgent(DRQAgent):
             nn.Linear(50, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 64),
-            nn.LayerNorm(64),
+            nn.LayerNorm(64) #without normalization
         ).to(self.device)
         
         self.projection.train()
         
         self.projection_optimizer = torch.optim.Adam(self.projection.parameters(), lr=lr)
-        
+        self.encoder_optimizer = torch.optim.Adam(self.critic.encoder.parameters(), lr=lr)
         #contrastive learning
-        self.cross_entropy_loss = nn.CrossEntropyLoss()
+        self.cross_entropy_loss = nn.CrossEntropyLoss().to(self.device)
         rms = utils.RMS(self.device)
         self.pbe = utils.PBE(rms, knn_clip, knn_k, knn_avg, knn_rms,
                              self.device)
@@ -74,18 +74,45 @@ class APTAgent(DRQAgent):
         anchor_rep = self.critic.get_representation(anchor)
         anchor_proj = self.projection(torch.relu(anchor_rep))
         
+        
         positive = self.aug(obs)
         positive_rep = self.critic.get_representation(positive)
-        positive_proj = self.projection(torch.relu(positive_rep)).detach() #curl        
-        
+        positive_proj = self.projection(torch.relu(positive_rep)).detach() #curl
+        #without layernorm
+        #anchor_proj = F.normalize(self.projection(torch.relu(anchor_rep)), dim=1)
+        #positive_proj = F.normalize(self.projection(torch.relu(positive_rep)), dim=1).detach() #curl 
+        '''
         logits = torch.matmul(anchor_proj, positive_proj.T)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
+        '''
+        temperature = 0.07
+        label = torch.cat([torch.arange(int(obs.shape[0])) for i in range(2)], dim=0)
+        label = (label.unsqueeze(0) == label.unsqueeze(1)).float().to(self.device)
+        proj = torch.concat((anchor_proj, positive_proj))
+        similarity_matrix = torch.matmul(proj, proj.T)
+        mask = torch.eye(label.shape[0], dtype=torch.bool).to(self.device)
+        label = label[~mask].view(label.shape[0], -1)
+        similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+
+        positive = similarity_matrix[label.bool()].view(label.shape[0], -1)
+        negative = similarity_matrix[~label.bool()].view(similarity_matrix.shape[0], -1)
+
+        logit = torch.cat([positive, negative], dim=1) / temperature
+        label = torch.zeros(logit.shape[0], dtype=torch.long).to(self.device)
+
+        ce = torch.nn.CrossEntropyLoss().to(self.device)
+        loss = ce(logit, label)
         
-        self.critic_optimizer.zero_grad()
+        '''
+        '''
+        
+        #self.critic_optimizer.zero_grad()
+        self.encoder_optimizer.zero_grad()
         self.projection_optimizer.zero_grad()
         loss.backward()
-        self.critic_optimizer.step()
+        #self.critic_optimizer.step()
+        self.encoder_optimizer.step()
         self.projection_optimizer.step()
         logger.log('train/nce_loss', loss, step)
     def update_critic(self, obs, obs_aug, action, reward, next_obs,
