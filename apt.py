@@ -57,13 +57,13 @@ class APTAgent(DRQAgent):
         self.projection.train()
         
         self.projection_optimizer = torch.optim.Adam(self.projection.parameters(), lr=lr)
-        
         #contrastive learning
-        self.cross_entropy_loss = nn.CrossEntropyLoss()
-        rms = utils.RMS(self.device)
+        self.cross_entropy_loss = nn.CrossEntropyLoss().to(self.device)
+        #rms = utils.RMS(self.device)
+        rms = utils.RunningMeanStd()
         self.pbe = utils.PBE(rms, knn_clip, knn_k, knn_avg, knn_rms,
                              self.device)
-        
+
     def compute_reward(self, next_obs):
         representation = self.critic.encoder(next_obs)
         reward = self.pbe(representation).reshape(-1,1)

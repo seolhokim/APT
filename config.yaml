@@ -78,7 +78,7 @@ apt:
     knn_clip : 0.0
     knn_k : 12
     knn_avg : true
-    knn_rms : false
+    knn_rms : true
     
 critic:
   class: drq.Critic

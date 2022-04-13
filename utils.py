@@ -169,26 +169,36 @@ class SquashedNormal(pyd.transformed_distribution.TransformedDistribution):
         for tr in self.transforms:
             mu = tr(mu)
         return mu
-class RMS(object):
-    """running mean and std """
-    def __init__(self, device, epsilon=1e-4, shape=(1,)):
-        self.M = torch.zeros(shape).to(device)
-        self.S = torch.ones(shape).to(device)
-        self.n = epsilon
+class RunningMeanStd(object):
+    def __init__(self, epsilon=1e-4, shape=()):
+        self.mean = np.zeros(shape, 'float64')
+        self.var = np.ones(shape, 'float64')
+        self.count = epsilon
 
-    def __call__(self, x):
-        bs = x.size(0)
-        delta = torch.mean(x, dim=0) - self.M
-        new_M = self.M + delta * bs / (self.n + bs)
-        new_S = (self.S * self.n + torch.var(x, dim=0) * bs +
-                 torch.square(delta) * self.n * bs /
-                 (self.n + bs)) / (self.n + bs)
+    def update(self, x):
+        x = x.detach().cpu().numpy()
+        batch_mean = np.mean(x, axis=0)
+        batch_var = np.var(x, axis=0)
+        batch_count = x.shape[0]
+        self.update_from_moments(batch_mean, batch_var, batch_count)
 
-        self.M = new_M
-        self.S = new_S
-        self.n += bs
+    def update_from_moments(self, batch_mean, batch_var, batch_count):
+        self.mean, self.var, self.count = update_mean_var_count_from_moments(
+            self.mean, self.var, self.count, batch_mean, batch_var, batch_count)
 
-        return self.M, self.S
+
+def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
+    delta = batch_mean - mean
+    tot_count = count + batch_count
+
+    new_mean = mean + delta * batch_count / tot_count
+    m_a = var * count
+    m_b = batch_var * batch_count
+    M2 = m_a + m_b + np.square(delta) * count * batch_count / tot_count
+    new_var = M2 / tot_count
+    new_count = tot_count
+
+    return new_mean, new_var, new_count
 
 class PBE(object):
     """particle-based entropy based on knn normalized by running mean """
@@ -221,13 +231,14 @@ class PBE(object):
                 torch.zeros_like(reward).to(self.device)
             ) if self.knn_clip >= 0.0 else reward  # (b1, 1)
         else:  # average over all k nearest neighbors
-            reward = reward.reshape(-1, 1)  # (b1 * k, 1)
-            reward /= self.rms(reward)[0] if self.knn_rms else 1.0
+            reward = torch.mean(reward, -1, keepdim=True)
+            if self.knn_rms:
+                self.rms.update(reward)
+                running_mean, running_var = float(self.rms.mean), float(self.rms.var)
+                reward = (reward - running_mean) / (running_var**0.5+ 1e-7)
             reward = torch.maximum(
                 reward - self.knn_clip,
                 torch.zeros_like(reward).to(
                     self.device)) if self.knn_clip >= 0.0 else reward
-            reward = reward.reshape((b1, self.knn_k))  # (b1, k)
-            reward = reward.mean(dim=1, keepdim=True)  # (b1, 1)
         reward = torch.log(reward + 1.0)
         return reward
